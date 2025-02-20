@@ -16,10 +16,17 @@ def calibrate_camera():
 
     # Start the pipeline
     pipeline.start(config)
+    profile = pipeline.get_active_profile()
+    intrinsics = profile.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics()
+
+    print("RealSense Intrinsics (Before Calibration):")
+    print(f"Width: {intrinsics.width}, Height: {intrinsics.height}")
+    print(f"fx: {intrinsics.fx}, fy: {intrinsics.fy}, cx: {intrinsics.ppx}, cy: {intrinsics.ppy}")
+    print(f"Distortion Model: {intrinsics.model}, Coeffs: {intrinsics.coeffs}")
 
     # Define checkerboard dimensions
     board_size = (8, 6)  # Adjust this according to your checkerboard
-    square_size = 0.025  # in meters (e.g., 16mm)
+    square_size = 0.0234  # in meters (e.g., 16mm)
 
     # Prepare object points in 3D world coordinates (with Z = 0)
     objp = np.zeros((board_size[0] * board_size[1], 3), dtype=np.float32)
@@ -131,6 +138,8 @@ def calibrate_camera():
 
 
 def main():
+
+
     calibrate_camera()
 
 

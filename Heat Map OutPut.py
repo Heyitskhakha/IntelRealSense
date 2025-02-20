@@ -17,12 +17,25 @@ depth_sensor = profile.get_device().first_depth_sensor()
 depth_scale = depth_sensor.get_depth_scale()  # Convert depth to meters
 
 # Camera intrinsic parameters (adjust for accuracy)
-fx, fy, cx, cy = 596.927, 596.927, 317.931, 241.347  # Camera intrinsics (adjust as needed)
+fx, fy, cx, cy = 611.1494140625,609.7687377929688, 318.608642578125, 233.38153076171875  # Camera intrinsics (adjust as needed)
 
 # Global variables for ROI selection
 roi_selected = False
 roi_x, roi_y, roi_w, roi_h = 0, 0, 0, 0
+def bilinear_interpolation(img, x, y):
+    """Perform bilinear interpolation for more accurate depth values"""
+    x1, y1 = int(x), int(y)
+    x2, y2 = min(x1 + 1, img.shape[1] - 1), min(y1 + 1, img.shape[0] - 1)
 
+    Q11 = img[y1, x1]
+    Q21 = img[y1, x2]
+    Q12 = img[y2, x1]
+    Q22 = img[y2, x2]
+
+    R1 = (x2 - x) * Q11 + (x - x1) * Q21
+    R2 = (x2 - x) * Q12 + (x - x1) * Q22
+
+    return (y2 - y) * R1 + (y - y1) * R2
 def pixel_to_world(depth, x, y):
     """Convert pixel coordinates to real-world size"""
     Z = depth * depth_scale  # Depth in meters
@@ -96,6 +109,65 @@ try:
             rect = cv2.minAreaRect(contour)
             # rect returns ((center_x, center_y), (w, h), angle)
             (center_x, center_y), (w, h), angle = rect
+            # Compute key depth points (ensure they are within bounds)
+            center_px, center_py = int(center_x), int(center_y)
+            top_px, top_py = max(center_px, 0), max(center_py - int(h / 2), 0)
+            bottom_px, bottom_py = max(center_px, 0), min(center_py + int(h / 2), depth_image.shape[0] - 1)
+            left_px, left_py = max(center_px - int(w / 2), 0), max(center_py, 0)
+            right_px, right_py = min(center_px + int(w / 2), depth_image.shape[1] - 1), max(center_py, 0)
+
+            # Get depth values at these points
+            depth_vals = [
+                roi_depth[center_py, center_px],
+                roi_depth[top_py, top_px],
+                roi_depth[bottom_py, bottom_px],
+                roi_depth[left_py, left_px],
+                roi_depth[right_py, right_px]
+            ]
+
+            # Convert to meters using RealSense depth scale
+            depth_vals_meters = [d * depth_scale for d in depth_vals if d > 0]
+
+            # Use the minimum depth (closest point) to improve accuracy
+            if depth_vals_meters:
+                depth_meters = min(depth_vals_meters)
+            else:
+                depth_meters = roi_depth[center_py, center_px] * depth_scale
+            # Get the rotated bounding box
+            rect = cv2.minAreaRect(contour)
+            (center_x, center_y), (w, h), angle = rect
+
+            # Get the box points to draw the rotated rectangle
+            box = cv2.boxPoints(rect)
+            box = box.astype(np.int32)
+
+            # Adjust for ROI offset
+            box_offset = box + np.array([roi_x, roi_y])
+            cv2.polylines(color_image, [box_offset], isClosed=True, color=(0, 255, 0), thickness=2)
+
+            # Identify top and bottom points (highest and lowest Y-coordinates)
+            top_idx = np.argmin(box[:, 1])  # Point with min Y (top of object)
+            bottom_idx = np.argmax(box[:, 1])  # Point with max Y (bottom of object)
+
+            top_x, top_y = box[top_idx]
+            bottom_x, bottom_y = box[bottom_idx]
+
+            # Convert to depth frame coordinates
+            top_depth = roi_depth[top_y - roi_y, top_x - roi_x]
+            bottom_depth = roi_depth[bottom_y - roi_y, bottom_x - roi_x]
+
+            # Convert to real-world coordinates
+            _, _, top_Z = pixel_to_world(top_depth, top_x, top_y)
+            _, _, bottom_Z = pixel_to_world(bottom_depth, bottom_x, bottom_y)
+
+            # Calculate object height in meters and inches
+            object_height_m = abs(bottom_Z - top_Z)
+            object_height_in = object_height_m * 39.37
+
+            # Display object height on image
+            cv2.putText(color_image, f"Height: {object_height_in:.2f} in",
+                        (roi_x + center_x, roi_y + center_y - 10),  # Position near the object
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
 
             # Get the box points to draw the rotated rectangle
             box = cv2.boxPoints(rect)
@@ -108,7 +180,7 @@ try:
             # If you're in an ROI, note that center_x and center_y are relative to the ROI.
             center_px = int(center_x)
             center_py = int(center_y)
-            depth_val = roi_depth[center_py, center_px]  # raw depth value
+            depth_val = bilinear_interpolation(roi_depth, center_px, center_py)
             depth_meters = depth_val * depth_scale
 
             # Calculate the real-world dimensions.
